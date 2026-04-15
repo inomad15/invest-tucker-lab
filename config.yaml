@@ -1,0 +1,55 @@
+# Tucker Strategy Configuration
+# VWAP 리셋: UTC 00:00 (KST 09:00)
+
+trading:
+  # PF > 1.0 달성 11종목 (v3 멀티코인 백테스트 검증 완료)
+  markets:
+    - KRW-BTC    # PF=2.68, EMA9
+    - KRW-ETH    # PF=5.19, EMA21
+    - KRW-IOST   # PF=2.45, EMA21
+    - KRW-RED    # PF=2.28, EMA9
+    - KRW-SOL    # PF=1.87, EMA21
+    - KRW-DOGE   # PF=1.72, EMA9
+    - KRW-XRP    # PF=1.61, EMA21
+    - KRW-TREE   # PF=1.42, EMA9
+    - KRW-TAO    # PF=1.39, EMA21
+    - KRW-HOLO   # PF=1.36, EMA21
+    - KRW-XPL    # PF=1.25, EMA21
+  mode: spot  # spot only (long only)
+
+strategy:
+  # VWAP 설정
+  vwap:
+    reset_hour_utc: 0  # UTC 00:00 = KST 09:00
+
+  # EMA 설정
+  ema:
+    period: 9  # 9-EMA (단기 추세)
+
+  # 진입 조건
+  entry:
+    ema_proximity_pct: 0.3  # EMA 근접 판정 범위 (±0.3%)
+    vwap_chop_lookback: 10  # VWAP 횡보 판정용 lookback 봉 수
+    vwap_chop_cross_threshold: 3  # 이 횟수 이상 교차하면 횡보로 판정
+
+  # 볼륨 프로파일 설정
+  volume_profile:
+    num_bins: 20  # 가격대 구간 수
+    thin_threshold_pct: 30  # 중위값 대비 이 % 이하면 '얇은' 매물대
+
+  # 청산 조건
+  exit:
+    # 캔들 몸통(종가)이 9-EMA 아래 마감 시 전량 매도
+    use_candle_body: true
+
+backtest:
+  timeframes:
+    - 1m
+    - 5m
+    - 15m
+  initial_capital_krw: 1000000  # 초기 자본 100만원
+  fee_rate: 0.0005  # Upbit 수수료 0.05%
+  slippage_pct: 0.05  # 슬리피지 0.05%
+
+data:
+  lookback_days: 90  # 백테스트용 과거 데이터 일수
