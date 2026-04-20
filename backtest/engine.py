@@ -99,6 +99,7 @@ class BacktestEngine:
         strategy: TuckerStrategy,
         market: str = "",
         timeframe: str = "",
+        htf_dfs: dict | None = None,
     ) -> BacktestResult:
         """백테스트를 실행한다.
 
@@ -107,14 +108,21 @@ class BacktestEngine:
             strategy: Tucker 전략 인스턴스
             market: 마켓 코드 (결과 표시용)
             timeframe: 타임프레임 (결과 표시용)
+            htf_dfs: 상위 타임프레임 DataFrame 맵 (전략이 MTF 지원 시 전달).
+                TuckerStrategyV3 등이 지원. 미지원 전략은 무시됨.
 
         Returns:
             BacktestResult
         """
         logger.info(f"백테스트 시작: {market} {timeframe}")
 
-        # 시그널 생성
-        signal_df = strategy.generate_signals(df)
+        # 시그널 생성 — 전략이 htf_dfs 인자 지원하면 전달
+        import inspect
+        sig = inspect.signature(strategy.generate_signals)
+        if htf_dfs is not None and "htf_dfs" in sig.parameters:
+            signal_df = strategy.generate_signals(df, htf_dfs=htf_dfs)
+        else:
+            signal_df = strategy.generate_signals(df)
 
         capital = self.initial_capital
         position_qty = 0.0          # 보유 수량
