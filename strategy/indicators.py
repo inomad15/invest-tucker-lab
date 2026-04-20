@@ -103,6 +103,31 @@ def calc_volume_ratio(df: pd.DataFrame, lookback: int = 20) -> pd.Series:
     return ratio.fillna(1.0)
 
 
+def calc_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """ATR(Average True Range)을 Wilder EMA 방식으로 계산한다.
+
+    True Range = max(high-low, |high-prev_close|, |low-prev_close|)
+    ATR = EMA(TR, period)
+
+    Args:
+        df: OHLCV DataFrame
+        period: ATR 기간. 기본값 14
+
+    Returns:
+        ATR Series (가격 단위, 원/달러 등)
+    """
+    high = df["high"]
+    low = df["low"]
+    prev_close = df["close"].shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr = tr.ewm(span=period, adjust=False).mean()
+    return atr
+
+
 def calc_volume_profile(
     df: pd.DataFrame,
     num_bins: int = 20,
@@ -208,6 +233,7 @@ def add_indicators(
     reset_hour_utc: int = 0,
     rsi_period: int = 14,
     volume_ratio_lookback: int = 20,
+    atr_period: int = 14,
 ) -> pd.DataFrame:
     """DataFrame에 모든 지표를 추가한다.
 
@@ -217,18 +243,21 @@ def add_indicators(
         reset_hour_utc: VWAP 리셋 시각 (UTC)
         rsi_period: RSI 기간 (Phase 1 진입 필터용)
         volume_ratio_lookback: 거래량 비율 평균 산출 기간
+        atr_period: ATR 기간 (Phase 2 변동성 필터용)
 
     Returns:
-        지표가 추가된 DataFrame (vwap, ema, rsi, volume_ratio 컬럼 추가)
+        지표가 추가된 DataFrame (vwap, ema, rsi, volume_ratio, atr 컬럼 추가)
     """
     result = df.copy()
     result["vwap"] = calc_vwap(df, reset_hour_utc=reset_hour_utc)
     result["ema"] = calc_ema(df, period=ema_period)
     result["rsi"] = calc_rsi(df, period=rsi_period)
     result["volume_ratio"] = calc_volume_ratio(df, lookback=volume_ratio_lookback)
+    result["atr"] = calc_atr(df, period=atr_period)
 
     logger.info(
         f"지표 추가 완료: VWAP(리셋 UTC {reset_hour_utc:02d}:00), "
-        f"{ema_period}-EMA, RSI({rsi_period}), vol_ratio({volume_ratio_lookback}봉)"
+        f"{ema_period}-EMA, RSI({rsi_period}), "
+        f"vol_ratio({volume_ratio_lookback}봉), ATR({atr_period})"
     )
     return result

@@ -55,6 +55,33 @@ strategy:
       require_agreement: true  # 상위 타임프레임 추세 일치 요구
       timeframes: ["15m", "1h"] # 확인할 HTF 목록 (close>EMA 동시 만족)
 
+    # Phase 2: 변동성 필터 (2026-04-20 추가 — TREE 편중 해소용)
+    atr:
+      period: 14
+      max_pct: 5.0             # ATR/가격 ≤ 5% 요구 (극변동 알트 차단). 0 이하 시 비활성
+
+# Phase 2: 포트폴리오 — 시총 가중 자본 할당 (메타 속성, 향후 실매매 연동 시 사용)
+# 현재 run-signal은 시그널 생성만 수행 → 가중치는 전략 인스턴스에 주입되어
+# 훗날 실매매 시 포지션 사이징에 사용됨.
+portfolio:
+  market_cap_weights:
+    # Tier 1 (시총 상위, 유동성 최우수)
+    KRW-BTC: 3.0
+    KRW-ETH: 2.5
+    # Tier 2 (시총 상위권)
+    KRW-SOL: 2.0
+    KRW-XRP: 1.5
+    KRW-DOGE: 1.5
+    # Tier 3 (중간)
+    KRW-TAO: 1.2
+    # Tier 4 (소형 알트)
+    KRW-IOST: 1.0
+    KRW-RED: 1.0
+    KRW-TREE: 1.0
+    KRW-HOLO: 1.0
+    KRW-XPL: 1.0
+  default_weight: 1.0          # 위 목록에 없는 종목의 기본값
+
 backtest:
   timeframes:
     - 1m

@@ -75,23 +75,34 @@ def main() -> None:
     else:
         logger.info("텔레그램 알림 비활성화 (콘솔 로그만 출력)")
 
-    # Phase 1: config.yaml에서 신규 필터 파라미터 로드
+    # Phase 1-2: config.yaml에서 신규 필터 파라미터 로드
     _filters = config.get("strategy", {}).get("filters", {})
     _rsi_cfg = _filters.get("rsi", {})
     _vol_cfg = _filters.get("volume_ratio", {})
     _mtf_cfg = _filters.get("mtf", {})
+    _atr_cfg = _filters.get("atr", {})
     _filter_kwargs = dict(
         rsi_period=_rsi_cfg.get("period", 14),
         rsi_threshold=_rsi_cfg.get("threshold", 55.0),
         volume_ratio_lookback=_vol_cfg.get("lookback", 20),
         volume_ratio_threshold=_vol_cfg.get("threshold", 1.5),
         require_mtf_agreement=_mtf_cfg.get("require_agreement", True),
+        atr_period=_atr_cfg.get("period", 14),
+        atr_max_pct=_atr_cfg.get("max_pct", 5.0),
     )
     logger.info(
-        f"Phase 1 필터: RSI≥{_filter_kwargs['rsi_threshold']}, "
+        f"Phase 1-2 필터: RSI≥{_filter_kwargs['rsi_threshold']}, "
         f"vol≥{_filter_kwargs['volume_ratio_threshold']}x, "
-        f"MTF={'ON' if _filter_kwargs['require_mtf_agreement'] else 'OFF'}"
+        f"MTF={'ON' if _filter_kwargs['require_mtf_agreement'] else 'OFF'}, "
+        f"ATR≤{_filter_kwargs['atr_max_pct']:.1f}%"
     )
+
+    # Phase 2: 시총 가중치 로드 (메타 속성, 실매매 연동 시 포지션 사이징에 사용)
+    _portfolio = config.get("portfolio", {})
+    _mcap_weights: dict = _portfolio.get("market_cap_weights", {})
+    _default_weight: float = _portfolio.get("default_weight", 1.0)
+    def _weight_for(market: str) -> float:
+        return _mcap_weights.get(market, _default_weight)
 
     # 마켓별 최적 전략 파라미터 (v3 멀티코인 백테스트 결과)
     # BTC형(EMA9): swing_min=1.0, prox=0.5
@@ -100,27 +111,37 @@ def main() -> None:
         reset_hour_utc=0, swing_lookback=5, swing_min_distance_pct=1.0,
         vwap_chop_lookback=10, vwap_chop_cross_threshold=4,
         vp_num_bins=20, vp_thin_threshold_pct=30,
-        exit_confirm_bars=3, cooldown_bars=5, atr_period=14, atr_stop_multiplier=0,
+        exit_confirm_bars=3, cooldown_bars=5, atr_stop_multiplier=0,
         **_filter_kwargs,
     )
 
     _btc_type = dict(ema_period=9, ema_proximity_pct=0.5, **_common)
     _eth_type = dict(ema_period=21, ema_proximity_pct=0.3, **_common)
 
+    def _make_strategy(market: str, base: dict) -> TuckerStrategyV3:
+        return TuckerStrategyV3(**base, market_cap_weight=_weight_for(market))
+
     # PF > 1.0 달성 11종목 (90일 백테스트 검증 완료)
     strategies: dict[str, TuckerStrategyV3] = {
-        "KRW-BTC":  TuckerStrategyV3(**_btc_type),   # PF=2.68, 13회
-        "KRW-ETH":  TuckerStrategyV3(**_eth_type),   # PF=5.19, 7회
-        "KRW-IOST": TuckerStrategyV3(**_eth_type),   # PF=2.45, 4회
-        "KRW-RED":  TuckerStrategyV3(**_btc_type),   # PF=2.28, 45회
-        "KRW-SOL":  TuckerStrategyV3(**_eth_type),   # PF=1.87, 12회
-        "KRW-DOGE": TuckerStrategyV3(**_btc_type),   # PF=1.72, 37회
-        "KRW-XRP":  TuckerStrategyV3(**_eth_type),   # PF=1.61, 8회
-        "KRW-TREE": TuckerStrategyV3(**_btc_type),   # PF=1.42, 61회
-        "KRW-TAO":  TuckerStrategyV3(**_eth_type),   # PF=1.39, 37회
-        "KRW-HOLO": TuckerStrategyV3(**_eth_type),   # PF=1.36, 14회
+        "KRW-BTC":  _make_strategy("KRW-BTC",  _btc_type),   # PF=2.68, 13회
+        "KRW-ETH":  _make_strategy("KRW-ETH",  _eth_type),   # PF=5.19, 7회
+        "KRW-IOST": _make_strategy("KRW-IOST", _eth_type),   # PF=2.45, 4회
+        "KRW-RED":  _make_strategy("KRW-RED",  _btc_type),   # PF=2.28, 45회
+        "KRW-SOL":  _make_strategy("KRW-SOL",  _eth_type),   # PF=1.87, 12회
+        "KRW-DOGE": _make_strategy("KRW-DOGE", _btc_type),   # PF=1.72, 37회
+        "KRW-XRP":  _make_strategy("KRW-XRP",  _eth_type),   # PF=1.61, 8회
+        "KRW-TREE": _make_strategy("KRW-TREE", _btc_type),   # PF=1.42, 61회
+        "KRW-TAO":  _make_strategy("KRW-TAO",  _eth_type),   # PF=1.39, 37회
+        "KRW-HOLO": _make_strategy("KRW-HOLO", _eth_type),   # PF=1.36, 14회
     }
     markets = list(strategies.keys())
+
+    # 가중치 할당 로그
+    logger.info(
+        "Phase 2 시총 가중치: "
+        + ", ".join(f"{m.replace('KRW-','')}={s.market_cap_weight:.1f}"
+                    for m, s in strategies.items())
+    )
 
     # 모니터 실행
     monitor = SignalMonitor(

@@ -76,6 +76,9 @@ class TuckerStrategyV3:
         volume_ratio_lookback: 거래량 비율 산출 기간
         volume_ratio_threshold: 거래량 증가 배수 요건 (기본 1.5x)
         require_mtf_agreement: 상위 타임프레임 추세 일치 요구 여부
+        atr_max_pct: ATR/가격 비율 상한 (Phase 2 — 극변동 종목 차단, 기본 5.0%)
+        market_cap_weight: 시총 기반 자본 할당 가중치 (Phase 2 — 메타 속성,
+            향후 실매매 연동 시 포지션 사이징에 사용). 기본 1.0.
     """
 
     def __init__(
@@ -99,6 +102,8 @@ class TuckerStrategyV3:
         volume_ratio_lookback: int = 20,
         volume_ratio_threshold: float = 1.5,
         require_mtf_agreement: bool = True,
+        atr_max_pct: float = 5.0,
+        market_cap_weight: float = 1.0,
     ) -> None:
         self.ema_period = ema_period
         self.reset_hour_utc = reset_hour_utc
@@ -119,6 +124,8 @@ class TuckerStrategyV3:
         self.volume_ratio_lookback = volume_ratio_lookback
         self.volume_ratio_threshold = volume_ratio_threshold
         self.require_mtf_agreement = require_mtf_agreement
+        self.atr_max_pct = atr_max_pct
+        self.market_cap_weight = market_cap_weight
 
     def _calc_atr(self, df: pd.DataFrame) -> pd.Series:
         """ATR을 계산한다."""
@@ -205,7 +212,37 @@ class TuckerStrategyV3:
         if not self._is_volume_sufficient(df, idx):
             return False
 
+        # 조건 8: 변동성 허용 범위 내 (Phase 2 필터 — 극변동 종목 차단)
+        if not self._is_volatility_acceptable(df, idx):
+            return False
+
         return True
+
+    def _is_volatility_acceptable(self, df: pd.DataFrame, idx: int) -> bool:
+        """ATR이 가격 대비 허용 범위 내인지 확인한다.
+
+        ATR/close × 100 ≤ atr_max_pct 이어야 진입 가능.
+        TREE 같은 극변동 알트코인의 무분별한 진입을 차단.
+        `atr_max_pct ≤ 0`이면 필터 비활성화(모두 통과).
+
+        ATR 컬럼이 없으면 즉석 계산(tucker_v3._calc_atr)으로 fallback.
+        """
+        if self.atr_max_pct <= 0:
+            return True  # 필터 꺼짐
+
+        if "atr" in df.columns:
+            atr_val = df.iloc[idx]["atr"]
+        else:
+            # backward compat: 과거 add_indicators 사용 시 atr 없을 수 있음
+            atr_series = self._calc_atr(df)
+            atr_val = atr_series.iloc[idx]
+
+        close_val = df.iloc[idx]["close"]
+        if pd.isna(atr_val) or pd.isna(close_val) or close_val <= 0:
+            return False  # 데이터 불완전 시 보수적 차단
+
+        atr_pct = (atr_val / close_val) * 100.0
+        return atr_pct <= self.atr_max_pct
 
     def _is_rsi_sufficient(self, df: pd.DataFrame, idx: int) -> bool:
         """RSI가 임계값(기본 55) 이상인지 확인한다.
@@ -301,22 +338,21 @@ class TuckerStrategyV3:
                 None이거나 비어있고 `require_mtf_agreement=True`이면 진입 차단됨.
                 백테스트 시 MTF 데이터가 준비되면 전달하고, 없으면 None.
         """
-        if (
-            "vwap" not in df.columns
-            or "ema" not in df.columns
-            or "rsi" not in df.columns
-            or "volume_ratio" not in df.columns
-        ):
+        required_cols = {"vwap", "ema", "rsi", "volume_ratio", "atr"}
+        if not required_cols.issubset(df.columns):
             df = add_indicators(
                 df,
                 ema_period=self.ema_period,
                 reset_hour_utc=self.reset_hour_utc,
                 rsi_period=self.rsi_period,
                 volume_ratio_lookback=self.volume_ratio_lookback,
+                atr_period=self.atr_period,
             )
 
         df = df.copy()
-        df["atr"] = self._calc_atr(df)
+        # ATR 컬럼이 add_indicators로 이미 있으면 그대로, 아니면 재계산
+        if "atr" not in df.columns:
+            df["atr"] = self._calc_atr(df)
 
         # HTF DataFrame에 EMA 지표가 없으면 자동 계산 (backtest 편의)
         if htf_dfs:

@@ -181,6 +181,7 @@ class SignalMonitor:
             reset_hour_utc=strategy.reset_hour_utc,
             rsi_period=strategy.rsi_period,
             volume_ratio_lookback=strategy.volume_ratio_lookback,
+            atr_period=strategy.atr_period,
         )
 
         idx = len(analysis_df) - 1
@@ -246,6 +247,16 @@ class SignalMonitor:
             # 진입 조건 확인
             if strategy._is_vwap_choppy(analysis_df, idx):
                 logger.debug(f"{market} VWAP 횡보 구간 — 관망")
+                return
+
+            # Phase 2: ATR 변동성 필터 (진입 이전에 먼저 체크 — 가볍고 명확)
+            if not strategy._is_volatility_acceptable(analysis_df, idx):
+                atr_val = analysis_df.iloc[idx].get("atr", float("nan"))
+                atr_pct = (atr_val / close * 100.0) if close > 0 else float("nan")
+                logger.debug(
+                    f"{market} 변동성 과다 — 관망 "
+                    f"(ATR/price={atr_pct:.2f}% > {strategy.atr_max_pct:.1f}%)"
+                )
                 return
 
             if not strategy._is_pullback_bounce(analysis_df, idx):
