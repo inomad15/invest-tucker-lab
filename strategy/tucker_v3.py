@@ -79,6 +79,9 @@ class TuckerStrategyV3:
         atr_max_pct: ATR/가격 비율 상한 (Phase 2 — 극변동 종목 차단, 기본 5.0%)
         market_cap_weight: 시총 기반 자본 할당 가중치 (Phase 2 — 메타 속성,
             향후 실매매 연동 시 포지션 사이징에 사용). 기본 1.0.
+        take_profit_pct: 즉시 전량 익절 % (Phase 3, 0 이하 시 비활성). 기본 5.0.
+        time_stop_bars: 진입 후 경과 시 강제 청산 봉 수 (Phase 3, 0 이하 시
+            비활성). 기본 48 (5분봉 기준 4시간).
     """
 
     def __init__(
@@ -104,6 +107,8 @@ class TuckerStrategyV3:
         require_mtf_agreement: bool = True,
         atr_max_pct: float = 5.0,
         market_cap_weight: float = 1.0,
+        take_profit_pct: float = 5.0,
+        time_stop_bars: int = 48,
     ) -> None:
         self.ema_period = ema_period
         self.reset_hour_utc = reset_hour_utc
@@ -126,6 +131,8 @@ class TuckerStrategyV3:
         self.require_mtf_agreement = require_mtf_agreement
         self.atr_max_pct = atr_max_pct
         self.market_cap_weight = market_cap_weight
+        self.take_profit_pct = take_profit_pct
+        self.time_stop_bars = time_stop_bars
 
     def _calc_atr(self, df: pd.DataFrame) -> pd.Series:
         """ATR을 계산한다."""
@@ -368,6 +375,7 @@ class TuckerStrategyV3:
 
         in_position = False
         entry_price = 0.0
+        entry_bar = 0  # Phase 3: 시간 스탑용
         cooldown_remaining = 0
 
         warmup = max(
@@ -389,14 +397,24 @@ class TuckerStrategyV3:
 
             if in_position:
                 exit_reason = ""
+                pnl_pct = ((row["close"] / entry_price) - 1.0) * 100.0 if entry_price > 0 else 0.0
 
-                # ATR 긴급 손절
-                if self.atr_stop_multiplier > 0:
+                # Phase 3 우선순위 1: 즉시 전량 익절 (+take_profit_pct %)
+                if self.take_profit_pct > 0 and pnl_pct >= self.take_profit_pct:
+                    exit_reason = "take_profit"
+
+                # 기존: ATR 긴급 손절
+                if not exit_reason and self.atr_stop_multiplier > 0:
                     atr_stop = entry_price - (row["atr"] * self.atr_stop_multiplier)
                     if row["close"] < atr_stop:
                         exit_reason = "atr_stop"
 
-                # EMA 아래 N봉 연속 마감
+                # Phase 3 우선순위 3: 시간 스탑 (진입 후 N봉 초과 시 강제 청산)
+                if not exit_reason and self.time_stop_bars > 0:
+                    if (idx - entry_bar) >= self.time_stop_bars:
+                        exit_reason = "time_stop"
+
+                # 기존: EMA 아래 N봉 연속 마감
                 if not exit_reason:
                     if self._count_consecutive_below_ema(df, idx) >= self.exit_confirm_bars:
                         exit_reason = "ema_exit"
@@ -432,6 +450,7 @@ class TuckerStrategyV3:
                     exit_reasons.append("")
                     in_position = True
                     entry_price = row["close"]
+                    entry_bar = idx  # Phase 3: 시간 스탑 기준점
                 else:
                     signals.append(Signal.WAIT.value)
                     positions.append(0)
@@ -445,10 +464,13 @@ class TuckerStrategyV3:
         sell_count = signals.count(Signal.SELL.value)
         ema_exits = exit_reasons.count("ema_exit")
         atr_stops = exit_reasons.count("atr_stop")
+        take_profits = exit_reasons.count("take_profit")
+        time_stops = exit_reasons.count("time_stop")
 
         logger.info(
             f"v3 시그널 생성: BUY={buy_count}, SELL={sell_count} "
-            f"(EMA청산={ema_exits}, ATR손절={atr_stops})"
+            f"(TP={take_profits}, ATR손절={atr_stops}, "
+            f"시간스탑={time_stops}, EMA청산={ema_exits})"
         )
 
         return df

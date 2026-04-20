@@ -75,12 +75,13 @@ def main() -> None:
     else:
         logger.info("텔레그램 알림 비활성화 (콘솔 로그만 출력)")
 
-    # Phase 1-2: config.yaml에서 신규 필터 파라미터 로드
+    # Phase 1-3: config.yaml에서 신규 필터·청산 파라미터 로드
     _filters = config.get("strategy", {}).get("filters", {})
     _rsi_cfg = _filters.get("rsi", {})
     _vol_cfg = _filters.get("volume_ratio", {})
     _mtf_cfg = _filters.get("mtf", {})
     _atr_cfg = _filters.get("atr", {})
+    _exit_cfg = config.get("strategy", {}).get("exit", {})
     _filter_kwargs = dict(
         rsi_period=_rsi_cfg.get("period", 14),
         rsi_threshold=_rsi_cfg.get("threshold", 55.0),
@@ -89,12 +90,18 @@ def main() -> None:
         require_mtf_agreement=_mtf_cfg.get("require_agreement", True),
         atr_period=_atr_cfg.get("period", 14),
         atr_max_pct=_atr_cfg.get("max_pct", 5.0),
+        take_profit_pct=_exit_cfg.get("take_profit_pct", 5.0),
+        time_stop_bars=_exit_cfg.get("time_stop_bars", 48),
     )
     logger.info(
         f"Phase 1-2 필터: RSI≥{_filter_kwargs['rsi_threshold']}, "
         f"vol≥{_filter_kwargs['volume_ratio_threshold']}x, "
         f"MTF={'ON' if _filter_kwargs['require_mtf_agreement'] else 'OFF'}, "
         f"ATR≤{_filter_kwargs['atr_max_pct']:.1f}%"
+    )
+    logger.info(
+        f"Phase 3 청산: TP=+{_filter_kwargs['take_profit_pct']:.1f}%, "
+        f"time_stop={_filter_kwargs['time_stop_bars']}봉"
     )
 
     # Phase 2: 시총 가중치 로드 (메타 속성, 실매매 연동 시 포지션 사이징에 사용)

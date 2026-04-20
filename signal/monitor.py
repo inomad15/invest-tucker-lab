@@ -197,18 +197,33 @@ class SignalMonitor:
             return
 
         if pos.in_position:
-            # 청산 조건 확인
-            # ATR 손절
-            analysis_df["atr"] = strategy._calc_atr(analysis_df)
-            atr_val = analysis_df.iloc[idx]["atr"]
+            # 청산 조건 확인 (Phase 3 우선순위 체계)
+            atr_val = analysis_df.iloc[idx].get("atr", float("nan"))
+            if pd.isna(atr_val):  # add_indicators로 이미 계산되지만 fallback
+                analysis_df["atr"] = strategy._calc_atr(analysis_df)
+                atr_val = analysis_df.iloc[idx]["atr"]
 
             exit_reason = ""
+            pnl_pct = ((close / pos.entry_price) - 1.0) * 100.0 if pos.entry_price > 0 else 0.0
 
-            if strategy.atr_stop_multiplier > 0:
+            # 1순위: 즉시 전량 익절 (+take_profit_pct %)
+            if strategy.take_profit_pct > 0 and pnl_pct >= strategy.take_profit_pct:
+                exit_reason = "take_profit"
+
+            # 2순위: ATR 긴급 손절
+            if not exit_reason and strategy.atr_stop_multiplier > 0:
                 atr_stop = pos.entry_price - (atr_val * strategy.atr_stop_multiplier)
                 if close < atr_stop:
                     exit_reason = "atr_stop"
 
+            # 3순위: 시간 스탑 (진입 후 N봉 × timeframe 분 초과)
+            if not exit_reason and strategy.time_stop_bars > 0 and pos.entry_time is not None:
+                bar_minutes = TIMEFRAME_MINUTES.get(self.timeframe, 5)
+                elapsed_minutes = (datetime.now() - pos.entry_time).total_seconds() / 60.0
+                if elapsed_minutes >= strategy.time_stop_bars * bar_minutes:
+                    exit_reason = "time_stop"
+
+            # 4순위: EMA 아래 N봉 연속 마감
             if not exit_reason:
                 consecutive = strategy._count_consecutive_below_ema(analysis_df, idx)
                 if consecutive >= strategy.exit_confirm_bars:
