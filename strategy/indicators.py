@@ -68,6 +68,41 @@ def calc_ema(df: pd.DataFrame, period: int = 9) -> pd.Series:
     return ema
 
 
+def calc_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """RSI(Relative Strength Index)를 Wilder 방식(EMA smoothing)으로 계산한다.
+
+    Args:
+        df: OHLCV DataFrame
+        period: RSI 기간. 기본값 14
+
+    Returns:
+        RSI Series (0~100 범위, 초반 워밍업 구간은 50.0으로 채움)
+    """
+    delta = df["close"].diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0.0, np.nan)
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    return rsi.fillna(50.0)
+
+
+def calc_volume_ratio(df: pd.DataFrame, lookback: int = 20) -> pd.Series:
+    """거래량 비율(현재 봉 거래량 ÷ 최근 N봉 평균)을 계산한다.
+
+    Args:
+        df: OHLCV DataFrame
+        lookback: 평균 산출 기간. 기본값 20
+
+    Returns:
+        volume_ratio Series (1.0 이상이면 평균 초과, 1.0 미만이면 미달)
+    """
+    avg_volume = df["volume"].rolling(window=lookback, min_periods=1).mean()
+    ratio = df["volume"] / avg_volume.replace(0.0, np.nan)
+    return ratio.fillna(1.0)
+
+
 def calc_volume_profile(
     df: pd.DataFrame,
     num_bins: int = 20,
@@ -171,6 +206,8 @@ def add_indicators(
     df: pd.DataFrame,
     ema_period: int = 9,
     reset_hour_utc: int = 0,
+    rsi_period: int = 14,
+    volume_ratio_lookback: int = 20,
 ) -> pd.DataFrame:
     """DataFrame에 모든 지표를 추가한다.
 
@@ -178,13 +215,20 @@ def add_indicators(
         df: OHLCV DataFrame
         ema_period: EMA 기간
         reset_hour_utc: VWAP 리셋 시각 (UTC)
+        rsi_period: RSI 기간 (Phase 1 진입 필터용)
+        volume_ratio_lookback: 거래량 비율 평균 산출 기간
 
     Returns:
-        지표가 추가된 DataFrame (원본에 컬럼 추가)
+        지표가 추가된 DataFrame (vwap, ema, rsi, volume_ratio 컬럼 추가)
     """
     result = df.copy()
     result["vwap"] = calc_vwap(df, reset_hour_utc=reset_hour_utc)
     result["ema"] = calc_ema(df, period=ema_period)
+    result["rsi"] = calc_rsi(df, period=rsi_period)
+    result["volume_ratio"] = calc_volume_ratio(df, lookback=volume_ratio_lookback)
 
-    logger.info(f"지표 추가 완료: VWAP(리셋 UTC {reset_hour_utc:02d}:00), {ema_period}-EMA")
+    logger.info(
+        f"지표 추가 완료: VWAP(리셋 UTC {reset_hour_utc:02d}:00), "
+        f"{ema_period}-EMA, RSI({rsi_period}), vol_ratio({volume_ratio_lookback}봉)"
+    )
     return result

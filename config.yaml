@@ -42,6 +42,19 @@ strategy:
     # 캔들 몸통(종가)이 9-EMA 아래 마감 시 전량 매도
     use_candle_body: true
 
+  # Phase 1: 진입 필터 강화 (2026-04-20 추가)
+  # 실시간 10전 1승 9패(-11.39%) 문제 — 과민반응 억제용 추가 필터
+  filters:
+    rsi:
+      period: 14
+      threshold: 55.0          # RSI ≥ 55 요구: 과매도 반등 배제, 상승 추세 확인
+    volume_ratio:
+      lookback: 20             # 최근 20봉 평균 대비
+      threshold: 1.5           # 거래량 1.5배 이상 증가 시 진입
+    mtf:
+      require_agreement: true  # 상위 타임프레임 추세 일치 요구
+      timeframes: ["15m", "1h"] # 확인할 HTF 목록 (close>EMA 동시 만족)
+
 backtest:
   timeframes:
     - 1m

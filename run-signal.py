@@ -75,6 +75,24 @@ def main() -> None:
     else:
         logger.info("텔레그램 알림 비활성화 (콘솔 로그만 출력)")
 
+    # Phase 1: config.yaml에서 신규 필터 파라미터 로드
+    _filters = config.get("strategy", {}).get("filters", {})
+    _rsi_cfg = _filters.get("rsi", {})
+    _vol_cfg = _filters.get("volume_ratio", {})
+    _mtf_cfg = _filters.get("mtf", {})
+    _filter_kwargs = dict(
+        rsi_period=_rsi_cfg.get("period", 14),
+        rsi_threshold=_rsi_cfg.get("threshold", 55.0),
+        volume_ratio_lookback=_vol_cfg.get("lookback", 20),
+        volume_ratio_threshold=_vol_cfg.get("threshold", 1.5),
+        require_mtf_agreement=_mtf_cfg.get("require_agreement", True),
+    )
+    logger.info(
+        f"Phase 1 필터: RSI≥{_filter_kwargs['rsi_threshold']}, "
+        f"vol≥{_filter_kwargs['volume_ratio_threshold']}x, "
+        f"MTF={'ON' if _filter_kwargs['require_mtf_agreement'] else 'OFF'}"
+    )
+
     # 마켓별 최적 전략 파라미터 (v3 멀티코인 백테스트 결과)
     # BTC형(EMA9): swing_min=1.0, prox=0.5
     # ETH형(EMA21): swing_min=1.0, prox=0.3
@@ -83,6 +101,7 @@ def main() -> None:
         vwap_chop_lookback=10, vwap_chop_cross_threshold=4,
         vp_num_bins=20, vp_thin_threshold_pct=30,
         exit_confirm_bars=3, cooldown_bars=5, atr_period=14, atr_stop_multiplier=0,
+        **_filter_kwargs,
     )
 
     _btc_type = dict(ema_period=9, ema_proximity_pct=0.5, **_common)

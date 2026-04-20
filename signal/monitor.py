@@ -24,12 +24,19 @@ INTERVAL_MAP: dict[str, str] = {
     "3m": "minute3",
     "5m": "minute5",
     "15m": "minute15",
+    "30m": "minute30",
+    "60m": "minute60",
+    "1h": "minute60",
 }
 
 # 분 단위 변환
 TIMEFRAME_MINUTES: dict[str, int] = {
-    "1m": 1, "3m": 3, "5m": 5, "15m": 15,
+    "1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "60m": 60, "1h": 60,
 }
+
+# Phase 1: MTF 확인용 상위 타임프레임
+HTF_TIMEFRAMES: list[str] = ["15m", "1h"]
+HTF_LOOKBACK_CANDLES: int = 50
 
 
 @dataclass
@@ -109,6 +116,47 @@ class SignalMonitor:
             logger.error(f"{market} 데이터 조회 오류: {e}")
             return None
 
+    def _fetch_htf_candles(
+        self,
+        market: str,
+        ema_period: int,
+    ) -> dict[str, pd.DataFrame]:
+        """상위 타임프레임(15m, 1h) 캔들을 조회하고 EMA를 계산한다.
+
+        실패 시 빈 dict 반환 — 해당 HTF 필터는 자동으로 False가 되어 진입 차단.
+
+        Args:
+            market: 마켓 심볼 (예: "KRW-BTC")
+            ema_period: HTF EMA 기간 (기본 타임프레임과 동일 기간 사용)
+
+        Returns:
+            {"15m": df, "1h": df} 형식의 dict (EMA 컬럼 포함). 조회 실패 HTF는 제외.
+        """
+        htf_dfs: dict[str, pd.DataFrame] = {}
+        for tf in HTF_TIMEFRAMES:
+            interval = INTERVAL_MAP.get(tf)
+            if interval is None:
+                continue
+            try:
+                df = pyupbit.get_ohlcv(
+                    ticker=market,
+                    interval=interval,
+                    count=HTF_LOOKBACK_CANDLES,
+                )
+                if df is None or df.empty:
+                    logger.debug(f"{market} HTF {tf} 캔들 없음")
+                    continue
+                df.columns = ["open", "high", "low", "close", "volume", "value"]
+                df.index.name = "datetime"
+                # 마지막(미완성) 봉 제외, EMA 계산
+                df = df.iloc[:-1].copy()
+                df["ema"] = df["close"].ewm(span=ema_period, adjust=False).mean()
+                htf_dfs[tf] = df
+            except Exception as e:
+                logger.warning(f"{market} HTF {tf} 조회 오류: {e}")
+                continue
+        return htf_dfs
+
     def _check_signal(self, market: str, df: pd.DataFrame) -> None:
         """단일 마켓의 시그널을 확인하고 알림을 전송한다."""
         pos = self.state.positions[market]
@@ -131,6 +179,8 @@ class SignalMonitor:
             analysis_df,
             ema_period=strategy.ema_period,
             reset_hour_utc=strategy.reset_hour_utc,
+            rsi_period=strategy.rsi_period,
+            volume_ratio_lookback=strategy.volume_ratio_lookback,
         )
 
         idx = len(analysis_df) - 1
@@ -198,27 +248,49 @@ class SignalMonitor:
                 logger.debug(f"{market} VWAP 횡보 구간 — 관망")
                 return
 
-            if strategy._is_pullback_bounce(analysis_df, idx):
-                if strategy._check_volume_profile(analysis_df, idx):
-                    logger.info(
-                        f"🟢 {market} 매수 시그널 | "
-                        f"가격={close:,.0f} | EMA={ema_val:,.0f} | VWAP={vwap_val:,.0f}"
-                    )
+            if not strategy._is_pullback_bounce(analysis_df, idx):
+                return
 
-                    if self.notifier:
-                        self.notifier.send_signal(
-                            signal_type="BUY",
-                            market=market,
-                            price=close,
-                            ema=ema_val,
-                            vwap=vwap_val,
-                        )
+            if not strategy._check_volume_profile(analysis_df, idx):
+                logger.debug(f"{market} 위쪽 매물대 두꺼움 — 관망")
+                return
 
-                    pos.in_position = True
-                    pos.entry_price = close
-                    pos.entry_time = datetime.now()
-                    pos.last_signal = "BUY"
-                    self.state.total_signals += 1
+            # Phase 1: MTF 추세 일치 확인 (15m, 1h)
+            if strategy.require_mtf_agreement:
+                htf_dfs = self._fetch_htf_candles(market, strategy.ema_period)
+                current_ts = analysis_df.index[idx]
+                if not strategy._is_mtf_aligned(htf_dfs, current_ts):
+                    # HTF 중 하나라도 close<=EMA면 진입 차단
+                    mtf_states = {
+                        tf: f"close={htf.iloc[-1]['close']:.0f}/ema={htf.iloc[-1]['ema']:.0f}"
+                        for tf, htf in htf_dfs.items() if not htf.empty
+                    } if htf_dfs else {"status": "데이터 없음"}
+                    logger.debug(f"{market} MTF 추세 불일치 — 관망 | {mtf_states}")
+                    return
+
+            # 진입 확정
+            rsi_val = analysis_df.iloc[idx].get("rsi", float("nan"))
+            vol_ratio = analysis_df.iloc[idx].get("volume_ratio", float("nan"))
+            logger.info(
+                f"🟢 {market} 매수 시그널 | "
+                f"가격={close:,.0f} | EMA={ema_val:,.0f} | VWAP={vwap_val:,.0f} | "
+                f"RSI={rsi_val:.1f} | vol_ratio={vol_ratio:.2f}x"
+            )
+
+            if self.notifier:
+                self.notifier.send_signal(
+                    signal_type="BUY",
+                    market=market,
+                    price=close,
+                    ema=ema_val,
+                    vwap=vwap_val,
+                )
+
+            pos.in_position = True
+            pos.entry_price = close
+            pos.entry_time = datetime.now()
+            pos.last_signal = "BUY"
+            self.state.total_signals += 1
 
     def run(self) -> None:
         """모니터링 루프를 실행한다."""

@@ -71,6 +71,11 @@ class TuckerStrategyV3:
         cooldown_bars: 청산 후 재진입 금지 봉 수
         atr_period: ATR 기간
         atr_stop_multiplier: ATR 손절 배수 (0이면 비활성)
+        rsi_period: RSI 계산 기간 (Phase 1 필터)
+        rsi_threshold: RSI 진입 최소값 (기본 55 — 과매도 반등 배제, 추세 확인)
+        volume_ratio_lookback: 거래량 비율 산출 기간
+        volume_ratio_threshold: 거래량 증가 배수 요건 (기본 1.5x)
+        require_mtf_agreement: 상위 타임프레임 추세 일치 요구 여부
     """
 
     def __init__(
@@ -89,6 +94,11 @@ class TuckerStrategyV3:
         cooldown_bars: int = 5,
         atr_period: int = 14,
         atr_stop_multiplier: float = 2.0,
+        rsi_period: int = 14,
+        rsi_threshold: float = 55.0,
+        volume_ratio_lookback: int = 20,
+        volume_ratio_threshold: float = 1.5,
+        require_mtf_agreement: bool = True,
     ) -> None:
         self.ema_period = ema_period
         self.reset_hour_utc = reset_hour_utc
@@ -104,6 +114,11 @@ class TuckerStrategyV3:
         self.cooldown_bars = cooldown_bars
         self.atr_period = atr_period
         self.atr_stop_multiplier = atr_stop_multiplier
+        self.rsi_period = rsi_period
+        self.rsi_threshold = rsi_threshold
+        self.volume_ratio_lookback = volume_ratio_lookback
+        self.volume_ratio_threshold = volume_ratio_threshold
+        self.require_mtf_agreement = require_mtf_agreement
 
     def _calc_atr(self, df: pd.DataFrame) -> pd.Series:
         """ATR을 계산한다."""
@@ -155,6 +170,8 @@ class TuckerStrategyV3:
         3. 저가가 EMA 근접 (풀백 확인)
         4. 종가 > EMA (지지 확인)
         5. 양봉 (close > open)
+        6. RSI ≥ rsi_threshold (Phase 1 — 추세 확인, 과매도 반등 배제)
+        7. volume_ratio ≥ volume_ratio_threshold (Phase 1 — 거래량 증가 요건)
         """
         row = df.iloc[idx]
         ema_val = row["ema"]
@@ -180,6 +197,73 @@ class TuckerStrategyV3:
         if row["close"] <= row["open"]:
             return False
 
+        # 조건 6: RSI 충분 (Phase 1 필터)
+        if not self._is_rsi_sufficient(df, idx):
+            return False
+
+        # 조건 7: 거래량 충분 (Phase 1 필터)
+        if not self._is_volume_sufficient(df, idx):
+            return False
+
+        return True
+
+    def _is_rsi_sufficient(self, df: pd.DataFrame, idx: int) -> bool:
+        """RSI가 임계값(기본 55) 이상인지 확인한다.
+
+        RSI 55+는 상승 추세 지속을 의미. 과매도(<30) 반등 시점의
+        약한 매수 시그널을 필터링하여 추세 확인된 진입만 허용.
+        """
+        if "rsi" not in df.columns:
+            return True  # RSI 미계산 시 필터 우회 (backward compat)
+        rsi_val = df.iloc[idx]["rsi"]
+        if pd.isna(rsi_val):
+            return False
+        return rsi_val >= self.rsi_threshold
+
+    def _is_volume_sufficient(self, df: pd.DataFrame, idx: int) -> bool:
+        """거래량이 최근 평균 대비 임계 배수(기본 1.5x) 이상인지 확인한다.
+
+        거래량 없는 눌림목 반등은 노이즈일 가능성 큼. 거래량 증가 동반
+        시그널만 진입하여 헛스윙 최소화.
+        """
+        if "volume_ratio" not in df.columns:
+            return True  # volume_ratio 미계산 시 필터 우회
+        vol_ratio = df.iloc[idx]["volume_ratio"]
+        if pd.isna(vol_ratio):
+            return False
+        return vol_ratio >= self.volume_ratio_threshold
+
+    def _is_mtf_aligned(
+        self,
+        htf_dfs: dict[str, pd.DataFrame] | None,
+        timestamp: pd.Timestamp | None,
+    ) -> bool:
+        """상위 타임프레임(15m, 1h)의 추세가 상승인지 확인한다.
+
+        각 HTF에서 가장 최근 완성 봉의 종가 > EMA 조건을 모두 만족하면 True.
+        `require_mtf_agreement=False`이면 항상 True 반환.
+        HTF 데이터가 없는데 요구 옵션 켜져 있으면 False (안전 측).
+        """
+        if not self.require_mtf_agreement:
+            return True
+        if not htf_dfs:
+            # MTF 요구하는데 데이터 없음 → 진입 불허 (보수적)
+            return False
+        for tf_name, htf_df in htf_dfs.items():
+            if htf_df is None or htf_df.empty or "ema" not in htf_df.columns:
+                return False
+            # timestamp 이하의 가장 최근 봉 사용
+            if timestamp is not None:
+                relevant = htf_df[htf_df.index <= timestamp]
+                if relevant.empty:
+                    return False
+                last = relevant.iloc[-1]
+            else:
+                last = htf_df.iloc[-1]
+            if pd.isna(last["close"]) or pd.isna(last["ema"]):
+                return False
+            if last["close"] <= last["ema"]:
+                return False
         return True
 
     def _check_volume_profile(self, df: pd.DataFrame, idx: int) -> bool:
@@ -204,17 +288,43 @@ class TuckerStrategyV3:
                 break
         return count
 
-    def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
-        """전체 데이터에 대해 매매 시그널을 생성한다."""
-        if "vwap" not in df.columns or "ema" not in df.columns:
+    def generate_signals(
+        self,
+        df: pd.DataFrame,
+        htf_dfs: dict[str, pd.DataFrame] | None = None,
+    ) -> pd.DataFrame:
+        """전체 데이터에 대해 매매 시그널을 생성한다.
+
+        Args:
+            df: OHLCV DataFrame (기본 타임프레임, 예: 5m)
+            htf_dfs: 상위 타임프레임 DataFrame 맵 (예: {"15m": df15, "1h": df60}).
+                None이거나 비어있고 `require_mtf_agreement=True`이면 진입 차단됨.
+                백테스트 시 MTF 데이터가 준비되면 전달하고, 없으면 None.
+        """
+        if (
+            "vwap" not in df.columns
+            or "ema" not in df.columns
+            or "rsi" not in df.columns
+            or "volume_ratio" not in df.columns
+        ):
             df = add_indicators(
                 df,
                 ema_period=self.ema_period,
                 reset_hour_utc=self.reset_hour_utc,
+                rsi_period=self.rsi_period,
+                volume_ratio_lookback=self.volume_ratio_lookback,
             )
 
         df = df.copy()
         df["atr"] = self._calc_atr(df)
+
+        # HTF DataFrame에 EMA 지표가 없으면 자동 계산 (backtest 편의)
+        if htf_dfs:
+            for tf_name, htf_df in htf_dfs.items():
+                if htf_df is not None and "ema" not in htf_df.columns:
+                    htf_df["ema"] = htf_df["close"].ewm(
+                        span=self.ema_period, adjust=False
+                    ).mean()
 
         signals: list[str] = []
         positions: list[int] = []
@@ -276,7 +386,11 @@ class TuckerStrategyV3:
                     signals.append(Signal.WAIT.value)
                     positions.append(0)
                     exit_reasons.append("choppy")
-                elif self._is_pullback_bounce(df, idx) and self._check_volume_profile(df, idx):
+                elif (
+                    self._is_pullback_bounce(df, idx)
+                    and self._check_volume_profile(df, idx)
+                    and self._is_mtf_aligned(htf_dfs, df.index[idx])
+                ):
                     signals.append(Signal.BUY.value)
                     positions.append(1)
                     exit_reasons.append("")
