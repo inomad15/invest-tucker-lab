@@ -129,25 +129,30 @@ def main() -> None:
         return TuckerStrategyV3(**base, market_cap_weight=_weight_for(market))
 
     # 2026-04-23 B안 개편: IOST(24h 2억, 저유동) 제거 + ADA/ONDO/XPL 추가
-    # 11종목 → 12종목 (Phase 1-3 배포판 환경, 유동성 30억+만 운영)
+    # 2026-05-12 옵션1 교체: RED(24h 5.5억, 저유동 + PF 0.82) 제거 + SAHARA 추가
+    # 12종목 유지 (Phase 1-3 배포판 환경, 유동성 30억+만 운영)
+    # PF 값은 find-candidates.py로 산정한 5/12 Binance 90일 백테스트 기준
     strategies: dict[str, TuckerStrategyV3] = {
         # 대형 (시총 상위)
-        "KRW-BTC":  _make_strategy("KRW-BTC",  _btc_type),   # Upbit 2위, PF=2.68
-        "KRW-ETH":  _make_strategy("KRW-ETH",  _eth_type),   # Upbit 3위, PF=5.19
-        "KRW-XRP":  _make_strategy("KRW-XRP",  _eth_type),   # Upbit 4위, PF=1.61
-        "KRW-SOL":  _make_strategy("KRW-SOL",  _eth_type),   # Upbit 8위, PF=1.87
-        "KRW-DOGE": _make_strategy("KRW-DOGE", _btc_type),   # Upbit 11위, PF=1.72
+        "KRW-BTC":  _make_strategy("KRW-BTC",  _btc_type),   # Upbit 2위, PF=2.48 (5/12 재산정)
+        "KRW-ETH":  _make_strategy("KRW-ETH",  _eth_type),   # Upbit 3위, PF=15.54 ★최우수
+        "KRW-XRP":  _make_strategy("KRW-XRP",  _eth_type),   # Upbit 4위, PF=1.06 (경계, 모니터)
+        "KRW-SOL":  _make_strategy("KRW-SOL",  _eth_type),   # Upbit 8위, PF=1.35
+        "KRW-DOGE": _make_strategy("KRW-DOGE", _btc_type),   # Upbit 11위, PF=1.77
         # 신규 추가 (우량 유동성, Binance 데이터 보유)
-        "KRW-ADA":  _make_strategy("KRW-ADA",  _eth_type),   # 🆕 Upbit 14위, 148억
-        "KRW-ONDO": _make_strategy("KRW-ONDO", _eth_type),   # 🆕 Upbit 31위, 70억
+        "KRW-ADA":  _make_strategy("KRW-ADA",  _eth_type),   # Upbit 14위, PF=1.17 (경계)
+        "KRW-ONDO": _make_strategy("KRW-ONDO", _eth_type),   # Upbit 31위, PF=0.96 (부진, 모니터)
         # 중간 규모
-        "KRW-HOLO": _make_strategy("KRW-HOLO", _eth_type),   # Upbit 35위, PF=1.36
-        "KRW-XPL":  _make_strategy("KRW-XPL",  _eth_type),   # 🆕 Upbit 38위, PF=1.78
-        "KRW-TAO":  _make_strategy("KRW-TAO",  _eth_type),   # Upbit 51위, PF=1.39
+        "KRW-HOLO": _make_strategy("KRW-HOLO", _eth_type),   # Upbit 35위, PF=1.51
+        "KRW-XPL":  _make_strategy("KRW-XPL",  _eth_type),   # Upbit 38위, PF=2.14
+        "KRW-TAO":  _make_strategy("KRW-TAO",  _eth_type),   # Upbit 51위, PF=1.62
         # 소형 알트 (유동성 낮음, Phase 1-3 필터로 억제 기대)
-        "KRW-TREE": _make_strategy("KRW-TREE", _btc_type),   # Upbit 71위, PF=1.42
-        "KRW-RED":  _make_strategy("KRW-RED",  _btc_type),   # Upbit 104위, PF=2.28
-        # 제거: KRW-IOST (Upbit 212위, 24h 2억 — 슬리피지 과다)
+        "KRW-TREE": _make_strategy("KRW-TREE", _btc_type),   # Upbit 71위, PF=2.11, +27.86% 수익 ★
+        # 🆕 2026-05-12 추가: RED 자리 교체. 24h 220억, BTC 모드 백테스트 PF=1.77, 12거래, +15.07%
+        "KRW-SAHARA": _make_strategy("KRW-SAHARA", _eth_type),
+        # 제거 이력:
+        #   - KRW-IOST (2026-04-23, 24h 2억 → 슬리피지 과다)
+        #   - KRW-RED  (2026-05-12, 24h 5.5억 + PF=0.82, -7.32% → 슬리피지 + 부진)
     }
     markets = list(strategies.keys())
 

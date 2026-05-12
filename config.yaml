@@ -2,25 +2,30 @@
 # VWAP 리셋: UTC 00:00 (KST 09:00)
 
 trading:
+  # 참고: 이 markets 리스트는 dead config (run-signal.py가 실제 소스).
+  # 동기화는 유지하되, 봇 동작은 run-signal.py의 strategies dict에 의해 결정됨.
   # 2026-04-23 B안: IOST(24h 2억, 저유동) 제거 + ADA/ONDO 추가 → 12종목
-  # XPL은 PF 1.25로 4-20 백테스트에선 1.78 개선 확인
+  # 2026-05-12 옵션1: RED(24h 5.5억, PF 0.82) → SAHARA(24h 220억, PF 1.77) 교체
   markets:
     # 대형 (Upbit 상위)
-    - KRW-BTC    # PF=2.68, EMA9
-    - KRW-ETH    # PF=5.19, EMA21
-    - KRW-XRP    # PF=1.61, EMA21
-    - KRW-SOL    # PF=1.87, EMA21
-    - KRW-DOGE   # PF=1.72, EMA9
+    - KRW-BTC     # PF=2.48 (5/12 재산정), EMA9
+    - KRW-ETH     # PF=15.54 ★최우수, EMA21
+    - KRW-XRP     # PF=1.06 (경계), EMA21
+    - KRW-SOL     # PF=1.35, EMA21
+    - KRW-DOGE    # PF=1.77, EMA9
     # 신규 (Binance 데이터 보유, 유동성 30억+)
-    - KRW-ADA    # 🆕 Upbit 14위, 148억
-    - KRW-ONDO   # 🆕 Upbit 31위, 70억
+    - KRW-ADA     # PF=1.17 (경계)
+    - KRW-ONDO    # PF=0.96 (부진, 모니터)
     # 중간
-    - KRW-HOLO   # PF=1.36, EMA21
-    - KRW-XPL    # PF=1.78 (Phase 4 재검증), EMA21
-    - KRW-TAO    # PF=1.39, EMA21
+    - KRW-HOLO    # PF=1.51, EMA21
+    - KRW-XPL     # PF=2.14, EMA21
+    - KRW-TAO     # PF=1.62, EMA21
     # 소형 (Phase 1-3 필터로 제어)
-    - KRW-TREE   # PF=1.42, EMA9
-    - KRW-RED    # PF=2.28, EMA9
+    - KRW-TREE    # PF=2.11, +27.86% 수익 ★ EMA9
+    - KRW-SAHARA  # 🆕 2026-05-12 RED 교체, PF=1.77, +15.07%, EMA21
+    # 제거 이력:
+    #   - KRW-IOST (2026-04-23, 24h 2억)
+    #   - KRW-RED  (2026-05-12, 24h 5.5억 + PF 0.82, -7.32%)
   mode: spot  # spot only (long only)
 
 strategy:
